@@ -22,7 +22,7 @@ class EnhancedOCRService:
         
         self.client = OpenAI(api_key=api_key)
         self.model = "gpt-4o"
-        print("✅ OCR Service initialized with GPT-4o")
+        print("OCR Service initialized with GPT-4o")
     
     def encode_image(self, image_path: str) -> str:
         """Convert image to base64"""
@@ -108,10 +108,10 @@ IMPORTANT: Return ONLY the JSON object, no explanation or markdown."""
                 content = response.choices[0].message.content
                 questions = self._parse_json_response(content)
                 all_questions.update(questions)
-                print(f"✅ Extracted {len(questions)} questions from {Path(img_path).name}")
+                print(f"Extracted {len(questions)} questions from {Path(img_path).name}")
                 
             except Exception as e:
-                print(f"❌ Error extracting from {img_path}: {str(e)}")
+                print(f"Error extracting from {img_path}: {str(e)}")
         
         return all_questions
     
@@ -172,10 +172,10 @@ IMPORTANT: Return ONLY the JSON object, no explanation or markdown."""
                 content = response.choices[0].message.content
                 answers = self._parse_json_response(content)
                 all_answers.update(answers)
-                print(f"✅ Extracted {len(answers)} answers from {Path(img_path).name}")
+                print(f"Extracted {len(answers)} answers from {Path(img_path).name}")
                 
             except Exception as e:
-                print(f"❌ Error extracting from {img_path}: {str(e)}")
+                print(f"Error extracting from {img_path}: {str(e)}")
         
         return all_answers
     
