@@ -73,9 +73,9 @@ class Database:
             Session = sessionmaker(bind=self.engine)
             self.session = Session()
             
-            print("✅ Database tables created/verified")
+            print("Database tables created/verified")
         except Exception as e:
-            print(f"❌ Database connection error: {str(e)}")
+            print(f"Database connection error: {str(e)}")
             raise
     
     def is_connected(self) -> bool:
@@ -99,11 +99,11 @@ class Database:
             )
             self.session.add(gt)
             self.session.commit()
-            print(f"✅ Added ground truth: {exam_name} (ID: {gt.id})")
+            print(f"Added ground truth: {exam_name} (ID: {gt.id})")
             return gt.id
         except Exception as e:
             self.session.rollback()
-            print(f"❌ Error adding ground truth: {str(e)}")
+            print(f"Error adding ground truth: {str(e)}")
             raise
     
     def get_ground_truth(self, gt_id: int) -> Optional[GroundTruth]:
@@ -143,11 +143,11 @@ class Database:
             )
             self.session.add(submission)
             self.session.commit()
-            print(f"✅ Added submission: Student {student_id}, Exam {exam_id} (ID: {submission.id})")
+            print(f"Added submission: Student {student_id}, Exam {exam_id} (ID: {submission.id})")
             return submission.id
         except Exception as e:
             self.session.rollback()
-            print(f"❌ Error adding submission: {str(e)}")
+            print(f"Error adding submission: {str(e)}")
             raise
     
     def get_submission(self, submission_id: int) -> Optional[Submission]:
@@ -168,6 +168,28 @@ class Database:
             print(f"Error getting submission by student ID: {str(e)}")
             return None
     
+    def check_duplicate_submission(self, student_id: str, exam_id: int) -> bool:
+        """Check if student already has a submission for this exam"""
+        try:
+            count = self.session.query(Submission).filter_by(
+                student_id=student_id,
+                exam_id=exam_id
+            ).count()
+            return count > 0
+        except Exception as e:
+            print(f"Error checking duplicate submission: {str(e)}")
+            return False
+    
+    def get_all_submissions_for_exam(self, exam_id: int) -> List[Submission]:
+        """Get all submissions for an exam"""
+        try:
+            return self.session.query(Submission).filter_by(
+                exam_id=exam_id
+            ).order_by(Submission.submission_time.desc()).all()
+        except Exception as e:
+            print(f"Error getting submissions for exam: {str(e)}")
+            return []
+    
     # Results operations
     def add_results(self, submission_id: int, results: List[Dict]):
         """Add grading results"""
@@ -184,10 +206,10 @@ class Database:
                 )
                 self.session.add(result)
             self.session.commit()
-            print(f"✅ Added {len(results)} results for submission {submission_id}")
+            print(f"Added {len(results)} results for submission {submission_id}")
         except Exception as e:
             self.session.rollback()
-            print(f"❌ Error adding results: {str(e)}")
+            print(f"Error adding results: {str(e)}")
             raise
     
     def get_results(self, submission_id: int) -> Optional[List[Dict]]:
@@ -219,10 +241,10 @@ class Database:
             self.session.query(Result).filter_by(submission_id=submission_id).delete()
             # Add updated results
             self.add_results(submission_id, results)
-            print(f"✅ Updated results for submission {submission_id}")
+            print(f"Updated results for submission {submission_id}")
         except Exception as e:
             self.session.rollback()
-            print(f"❌ Error updating results: {str(e)}")
+            print(f"Error updating results: {str(e)}")
             raise
     
     # Grade edit operations
@@ -239,10 +261,10 @@ class Database:
             )
             self.session.add(grade_edit)
             self.session.commit()
-            print(f"✅ Added grade edit for submission {edit['submission_id']}, question {edit['question_id']}")
+            print(f"Added grade edit for submission {edit['submission_id']}, question {edit['question_id']}")
         except Exception as e:
             self.session.rollback()
-            print(f"❌ Error adding grade edit: {str(e)}")
+            print(f"Error adding grade edit: {str(e)}")
             raise
     
     def get_grade_edits(self, submission_id: int) -> List[Dict]:

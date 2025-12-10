@@ -1,10 +1,5 @@
 """
-Enhanced OCR Service with OpenAI GPT-4 Vision
-Extracts text from images with high accuracy
-Fixed issues:
-- Better error handling
-- Improved prompts
-- More robust JSON parsing
+OCR Service with OpenAI GPT-4 Vision
 """
 import base64
 import json

@@ -18,6 +18,7 @@ from models import QuestionConfig, GroundTruthCreate, SubmissionCreate, GradeEdi
 from database import Database
 from ai_grading_engine import AIGradingEngine
 from ocr_service import EnhancedOCRService
+from validators import SubmissionValidator, GradingValidator, ValidationError
 
 # Global instances
 db = None
@@ -37,7 +38,7 @@ def initialize_services():
     
     if not api_key:
         print("\n" + "="*60)
-        print("⚠️  WARNING: OPENAI_API_KEY not set!")
+        print("  WARNING: OPENAI_API_KEY not set!")
         print("="*60)
         print("AI grading and OCR features will not work.")
         print("Please add your OpenAI API key to backend/.env file:")
@@ -48,11 +49,11 @@ def initialize_services():
     try:
         db = Database()
         if db.is_connected():
-            print("✅ Database connected successfully")
+            print("Database connected successfully")
         else:
-            print("❌ Database connection failed")
+            print("Database connection failed")
     except Exception as e:
-        print(f"❌ Database initialization error: {str(e)}")
+        print(f"Database initialization error: {str(e)}")
         db = None
     
     # Initialize AI services
@@ -60,30 +61,28 @@ def initialize_services():
         try:
             grading_engine = AIGradingEngine(api_key)
             ocr_service = EnhancedOCRService(api_key)
-            print("✅ AI services initialized successfully")
+            print("AI services initialized successfully")
         except Exception as e:
-            print(f"❌ AI services initialization error: {str(e)}")
+            print(f"AI services initialization error: {str(e)}")
             grading_engine = None
             ocr_service = None
     else:
         grading_engine = None
         ocr_service = None
     
-    print("\n" + "="*60)
-    print("SERVICE STATUS:")
-    print(f"  Database: {'✅ Active' if db and db.is_connected() else '❌ Inactive'}")
-    print(f"  AI Grading: {'✅ Active' if grading_engine else '❌ Inactive'}")
-    print(f"  OCR Service: {'✅ Active' if ocr_service else '❌ Inactive'}")
-    print("="*60 + "\n")
+    print("\nSERVICE STATUS:")
+    print(f"  Database: {'Active' if db and db.is_connected() else 'Inactive'}")
+    print(f"  AI Grading: {'Active' if grading_engine else 'Inactive'}")
+    print(f"  OCR Service: {'Active' if ocr_service else 'Inactive'}\n")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    print("\n🚀 Starting AI Grading System...")
+    print("\nStarting AI Grading System...")
     initialize_services()
     yield
-    print("\n👋 Shutting down...")
+    print("\nShutting down...")
 
 
 # Create FastAPI app
@@ -103,9 +102,7 @@ app.add_middleware(
 )
 
 
-# ============================================================================
 # ENDPOINTS
-# ============================================================================
 
 @app.get("/")
 async def root():
@@ -183,18 +180,37 @@ async def upload_ground_truth(
         questions_dict = json.loads(questions)
         total_marks_float = float(total_marks)
         
+        # Validate ground truth
+        validation_result = SubmissionValidator.validate_ground_truth(questions_dict, total_marks_float)
+        if not validation_result["valid"]:
+            raise HTTPException(
+                status_code=400, 
+                detail={
+                    "message": "Ground truth validation failed",
+                    "warnings": validation_result["warnings"]
+                }
+            )
+        
         # Store in database
         exam_id = db.add_ground_truth(exam_name, questions_dict, total_marks_float)
         
-        return {
+        response = {
             "success": True,
             "exam_id": exam_id,
             "exam_name": exam_name,
             "total_marks": total_marks_float,
             "questions_count": len(questions_dict)
         }
+        
+        if validation_result["warnings"]:
+            response["warnings"] = validation_result["warnings"]
+        
+        return response
+        
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=400, detail=f"Invalid configuration format: {str(e)}")
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
         print(f"Error uploading ground truth: {str(e)}")
         import traceback
@@ -227,7 +243,8 @@ async def get_exams():
 async def upload_student_papers(
     exam_id: int = Form(...),
     student_id: str = Form(...),
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    allow_duplicate: bool = Form(False)
 ):
     """Upload student papers"""
     try:
@@ -235,6 +252,18 @@ async def upload_student_papers(
         ground_truth = db.get_ground_truth(exam_id)
         if not ground_truth:
             raise HTTPException(status_code=404, detail="Exam not found")
+        
+        # Check for duplicate submission
+        existing_submission = SubmissionValidator.check_duplicate_submission(db, student_id, exam_id)
+        if existing_submission and not allow_duplicate:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": f"Student {student_id} already submitted for this exam",
+                    "existing_submission": existing_submission,
+                    "hint": "Set allow_duplicate=true to override"
+                }
+            )
         
         # Save files
         file_paths = []
@@ -249,12 +278,21 @@ async def upload_student_papers(
         if ocr_service:
             try:
                 extracted_answers = ocr_service.extract_student_answers(file_paths)
-                print(f"✅ OCR extracted answers: {list(extracted_answers.keys())}")
+                print(f"OCR extracted answers: {list(extracted_answers.keys())}")
             except Exception as e:
-                print(f"⚠️  OCR extraction failed: {str(e)}")
+                print(f"OCR extraction failed: {str(e)}")
                 extracted_answers = {}
         else:
-            print("⚠️  OCR service not available")
+            print("OCR service not available")
+        
+        # Validate extracted answers against ground truth
+        validation_result = SubmissionValidator.validate_extracted_answers(
+            ground_truth.questions, 
+            extracted_answers
+        )
+        
+        if not validation_result["valid"]:
+            print(f"Validation warnings: {validation_result['warnings']}")
         
         # Store submission
         submission_id = db.add_submission(
@@ -264,13 +302,20 @@ async def upload_student_papers(
             extracted_answers=extracted_answers
         )
         
-        return {
+        response = {
             "success": True,
             "submission_id": submission_id,
             "student_id": student_id,
             "exam_id": exam_id,
+            "validation": validation_result,
             "message": "Paper uploaded successfully. Ready to grade."
         }
+        
+        if existing_submission:
+            response["note"] = "This is a duplicate submission (previous submission exists)"
+        
+        return response
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -301,10 +346,28 @@ async def grade_paper(submission_id: int):
         if not ground_truth:
             raise HTTPException(status_code=404, detail="Ground truth not found")
         
+        # Validate extracted answers before grading
+        validation_result = SubmissionValidator.validate_extracted_answers(
+            ground_truth.questions,
+            submission.extracted_answers
+        )
+        
+        # Get unanswered questions
+        unanswered = SubmissionValidator.get_unanswered_questions(
+            ground_truth.questions,
+            submission.extracted_answers
+        )
+        
         # Grade submission
         results = grading_engine.grade_submission(
             ground_truth.questions,
             submission.extracted_answers
+        )
+        
+        # Validate grading results
+        grading_validation = GradingValidator.validate_grading_results(
+            results,
+            ground_truth.questions
         )
         
         # Store results
@@ -315,16 +378,26 @@ async def grade_paper(submission_id: int):
         total_max = sum(r["max_score"] for r in results)
         percentage = round((total_score / total_max * 100), 2) if total_max > 0 else 0
         
-        return {
+        response = {
             "success": True,
             "submission_id": submission_id,
             "total_score": round(total_score, 2),
             "total_max": total_max,
             "percentage": percentage,
-            "results": results
+            "results": results,
+            "validation": {
+                "extraction": validation_result,
+                "grading": grading_validation,
+                "unanswered_questions": unanswered
+            }
         }
+        
+        return response
+        
     except HTTPException:
         raise
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
         print(f"Error grading paper: {str(e)}")
         import traceback
@@ -379,6 +452,51 @@ async def get_results(submission_id_or_student_id: str):
         raise
     except Exception as e:
         print(f"Error getting results: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/validate-submission/{submission_id}")
+async def validate_submission(submission_id: int):
+    """Get validation status for a submission"""
+    try:
+        submission = db.get_submission(submission_id)
+        if not submission:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        
+        ground_truth = db.get_ground_truth(submission.exam_id)
+        if not ground_truth:
+            raise HTTPException(status_code=404, detail="Ground truth not found")
+        
+        validation_result = SubmissionValidator.validate_extracted_answers(
+            ground_truth.questions,
+            submission.extracted_answers
+        )
+        
+        unanswered = SubmissionValidator.get_unanswered_questions(
+            ground_truth.questions,
+            submission.extracted_answers
+        )
+        
+        all_answered = SubmissionValidator.validate_all_questions_answered(
+            ground_truth.questions,
+            submission.extracted_answers
+        )
+        
+        return {
+            "submission_id": submission_id,
+            "student_id": submission.student_id,
+            "exam_id": submission.exam_id,
+            "validation": validation_result,
+            "unanswered_questions": unanswered,
+            "all_questions_answered": all_answered,
+            "ready_for_grading": validation_result["valid"] and all_answered
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error validating submission: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -457,13 +575,21 @@ async def edit_grade(
         
         # Find the question result
         original_score = None
+        max_score = None
         for result in results:
             if result["question_id"] == question_id:
                 original_score = result["score"]
+                max_score = result["max_score"]
                 break
         
         if original_score is None:
             raise HTTPException(status_code=404, detail="Question not found")
+        
+        # Validate new score
+        try:
+            GradingValidator.validate_score(new_score, max_score, question_id)
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail=e.message)
         
         # Create edit record
         edit = {
@@ -490,10 +616,14 @@ async def edit_grade(
         
         return {
             "success": True,
-            "message": "Grade updated successfully"
+            "message": "Grade updated successfully",
+            "original_score": original_score,
+            "new_score": new_score
         }
     except HTTPException:
         raise
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
         print(f"Error editing grade: {str(e)}")
         import traceback
@@ -504,6 +634,6 @@ async def edit_grade(
 # Run server
 if __name__ == "__main__":
     import uvicorn
-    print("\n🚀 Starting AI Grading System...")
-    print("📚 API Documentation: http://localhost:8000/docs")
+    print("\nStarting AI Grading System...")
+    print("API Documentation: http://localhost:8000/docs")
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
