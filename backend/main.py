@@ -37,13 +37,10 @@ def initialize_services():
     api_key = os.getenv("OPENAI_API_KEY")
     
     if not api_key:
-        print("\n" + "="*60)
-        print("  WARNING: OPENAI_API_KEY not set!")
-        print("="*60)
+        print("\nWARNING: OPENAI_API_KEY not set!")
         print("AI grading and OCR features will not work.")
         print("Please add your OpenAI API key to backend/.env file:")
-        print("OPENAI_API_KEY=your-key-here")
-        print("="*60 + "\n")
+        print("OPENAI_API_KEY=your-key-here\n")
     
     # Initialize database
     try:
